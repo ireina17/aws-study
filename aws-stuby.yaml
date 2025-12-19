@@ -1,0 +1,210 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: aws-reisetech
+
+Resources:
+  #VPC作成
+  reisetechVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/21
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      Tags:
+        - Value: reisetech-vpc
+          Key: Name
+
+  #サブネット作成
+  SubnetPublicAZ4a:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref reisetechVpc
+      CidrBlock: 10.0.0.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs ]
+      Tags:
+        - Value: reisetech-subnet-public-a
+          Key: Name
+  SubnetPublicAZ1c:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref reisetechVpc
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs ]
+      Tags:
+        - Value: reisetech-subnet-public-c
+          Key: Name
+  SubnetPrivateAZ4a:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref reisetechVpc
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [ 0, !GetAZs ]
+      Tags:
+        - Value: reisetech-subnet-private-a
+          Key: Name
+  SubnetPrivateAZ1c:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref reisetechVpc
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select [ 1, !GetAZs ]
+      Tags:
+        - Value: reisetech-subnet-private-c
+          Key: Name
+
+  #ルートテーブル作成
+  RtbPublic:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref reisetechVpc
+      Tags:
+        - Value: rtb-public
+          Key: Name
+  RtbPrivate1ApNortheast1a:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref reisetechVpc
+      Tags:
+        - Value: rtb-private1-ap-northeast-1a
+          Key: Name
+  RtbPrivate2ApNortheast1c:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref reisetechVpc
+      Tags:
+        - Value: rtb-private1-ap-northeast-1c
+          Key: Name
+
+  #サブネットとルートテーブルの紐づける
+  PublicSubnetRouteTableAssociationAZ4a:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RtbPublic
+      SubnetId: !Ref SubnetPublicAZ4a
+  PublicSubnetRouteTableAssociationAZ1c:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RtbPublic
+      SubnetId: !Ref SubnetPublicAZ1c
+  PrivateSubnetRouteTableAssociationAZ4a:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RtbPrivate1ApNortheast1a
+      SubnetId: !Ref SubnetPrivateAZ4a
+  PrivateSubnetRouteTableAssociationAZ1c:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RtbPrivate2ApNortheast1c
+      SubnetId: !Ref SubnetPrivateAZ1c
+
+  #インターネットゲートウェイ作成
+  igw:
+    Type: AWS::EC2::InternetGateway
+  
+  #VPCとインターネットゲートウェイにアタッチする
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref reisetechVpc
+      InternetGatewayId: !Ref igw
+
+  #ゲートウェイへのルートを作成
+  Route:
+    Type: AWS::EC2::Route
+    Properties:
+       RouteTableId:
+         Ref: PublicSubnetRouteTableAssociationAZ4a
+       DestinationCidrBlock: 0.0.0.0/0
+       GatewayId:
+         Ref: igw
+
+  #インターフェースエンドポイント作成
+  InterfaceEndpoint:
+      Type: 'AWS::EC2::VPCEndpoint'
+      Properties:
+        VpcEndpointType: 'Interface'
+        ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
+        VpcId: !Ref reisetechVpc
+        PrivateDnsEnabled: true
+        SubnetIds:
+          - !Ref SubnetPublicAZ4a
+          - !Ref SubnetPublicAZ1c
+        SecurityGroupIds:
+          - !Ref reisetechApSecurityGroup
+
+  #ルートテーブルとAWSサービス内のS3のゲートウェイエンドポイントを作成する
+  VpceS3:
+    Type: 'AWS::EC2::VPCEndpoint'
+    Properties:
+      VpcEndpointType: 'Gateway'
+      VpcId: !Ref reisetechVpc
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - 's3:GetObject'
+            Resource:
+              - 'arn:aws:s3:::amzn-s3-demo-bucket/*'
+      RouteTableIds:
+        - !Ref PrivateSubnetRouteTableAssociationAZ4a
+        - !Ref PrivateSubnetRouteTableAssociationAZ1c
+
+  #セキュリティグループの作成
+  reisetechApSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: aws-reisetech-ec2-sg created 2025-12-19
+      GroupName: reisetech-ap-sg
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress: 
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref reisetechVpc
+      Tags:
+        - Value: aws-reisetech-ec2-sg
+          Key: Name
+
+  #既存のキーペアを指定
+  ImportedKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: NameForMyImportedKeyPair
+      PublicKeyMaterial: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICfp1F7DhdWZdqkYAUGCzcBsLmJeu9izpIyGpmmg7eCz example
+
+  #EC2インスタンス生成
+  reisetechApInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      DisableApiTermination: 'true'
+      ImageId: 'ami-09cd9fdbf26acc6b4'
+      InstanceType: 't2.micro'
+      KeyName: !Ref ImportedKeyPair
+      BlockDeviceMappings: 
+      - DeviceName: /dev/xvda
+        Ebs: 
+          VolumeType: "gp3"
+          Iops: "3000"
+          DeleteOnTermination: "false"
+          VolumeSize: "8"
+          Encrypted: false
+      NetworkInterfaces:
+      - AssociatePublicIpAddress: "true"
+        DeviceIndex: 0
+        GroupSet: 
+          - !Ref reisetechApSecurityGroup
+        SubnetId: !Ref SubnetPrivateAZ4a
+      Tags:
+        - Value: reisetech-ap
+          Key: Name
